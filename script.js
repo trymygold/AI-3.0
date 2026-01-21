@@ -2,7 +2,7 @@
 
 /* --- CONFIGURATION --- */
 const PRICELIST_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0GUVaTp6RLxbZIK6vVPsPoknhD8z7RJpsP450vHS2-9FshHs35_KbM2bSQZhoGp3Agww6DId480mo/pub?output=csv";
-const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
+const API_KEY = "AIzaSyB40AXOyJA6ooHBrh3aO0ajTFSf50rmzMQ"; 
 
 const DRIVE_FOLDERS = {
   earrings: "1eftKhpOHbCj8hzO11-KioFv03g0Yn61n",
