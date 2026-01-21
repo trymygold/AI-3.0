@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JEWELS-AI | Tamil Edition</title>
+  
+  <link rel="stylesheet" href="style.css" />
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    
+    <div id="flash-overlay"></div>
+
+    <div id="video-container">
+      <video id="webcam" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
+
+    <div id="loading-status">Starting Engine...</div>
+
+    <header id="controls-hero">
+      <div class="brand-row">
+        <div class="brand-left">
+          <img src="logo.png" alt="Jewels-ai Logo" class="brand-logo" />
+        </div>
+        <div class="action-row">
+          <button id="lang-btn" onclick="toggleLanguage()" title="Switch Language">🇺🇸</button>
+          
+          <button id="voice-btn" onclick="toggleVoiceControl()" title="Toggle Voice Control">🎙️</button>
+          <button id="snapshot-btn" onclick="takeSnapshot()" title="Take Photo">📷</button>
+        </div>
+      </div>
+
+      <div class="controls-panel">
+        <button id="tryall-btn" class="pill accent" onclick="toggleTryAll()">Try All</button>
+        <div id="jewelry-mode" class="pill-group">
+          <button class="pill" onclick="selectJewelryType('earrings')">Earrings</button>
+          <button class="pill" onclick="selectJewelryType('chains')">Chains</button>
+          <button class="pill" onclick="selectJewelryType('rings')">Rings</button>
+          <button class="pill" onclick="selectJewelryType('bangles')">Bangles</button>
+        </div>
+        <div id="jewelry-options" class="carousel-cards" style="display:none;"></div>
+      </div>
+    </header>
+
+    <div id="ai-concierge-container">
+        <div id="ai-bubble">Tap to wake Nila</div>
+        <div id="ai-avatar" onclick="toggleConciergeMute()">
+            <div class="avatar-ring"></div>
+            <div class="avatar-face">🤖</div> 
+        </div>
+    </div>
+
+    <div id="preview-modal">
+        <span class="close-preview" onclick="closePreview()">&times;</span>
+        <div class="preview-container"><img id="preview-image" src="" alt="Captured Look"></div>
+        <div class="preview-actions">
+            <button class="pill accent" onclick="downloadSingleSnapshot()">Download</button>
+            <button class="pill" onclick="shareSingleSnapshot()">Share</button>
+        </div>
+    </div>
+
+    <div id="gallery-modal">
+      <div class="gallery-content">
+        <span class="close-gallery" onclick="closeGallery()">&times;</span>
+        <h2 style="color:#d4af37; font-family:'Playfair Display'; margin-top:0;">Your Collection</h2>
+        <div id="gallery-grid"></div>
+        <div style="margin-top:20px;">
+          <button class="pill accent" onclick="downloadAllAsZip()">Download All (ZIP)</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
