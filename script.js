@@ -1,4 +1,4 @@
-/* script.js - Jewels-Ai Atelier: v5.0 (Co-Shopping Enabled) */
+/* script.js - Jewels-Ai Atelier: v5.1 (Live Streaming Fixed) */
 
 /* --- CONFIGURATION --- */
 const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
@@ -21,6 +21,7 @@ const watermarkImg = new Image(); watermarkImg.src = 'logo_watermark.png';
 /* DOM Elements */
 const videoElement = document.getElementById('webcam');
 const canvasElement = document.getElementById('overlay');
+const remoteVideo = document.getElementById('remote-video'); // NEW: Remote Video
 const canvasCtx = canvasElement.getContext('2d');
 const loadingStatus = document.getElementById('loading-status');
 const flashOverlay = document.getElementById('flash-overlay'); 
@@ -29,20 +30,13 @@ const flashOverlay = document.getElementById('flash-overlay');
 let earringImg = null, necklaceImg = null, ringImg = null, bangleImg = null;
 let currentType = ''; 
 let isProcessingHand = false, isProcessingFace = false;
-let lastGestureTime = 0;
-const GESTURE_COOLDOWN = 800; 
-let previousHandX = null;     
 
 /* Tracking Variables */
 let currentAssetName = "Select a Design"; 
 let currentAssetIndex = 0; 
 
 /* Physics State */
-let physics = { 
-    earringAngle: 0, earringVelocity: 0, swayOffset: 0, lastHeadX: 0      
-};
-
-/* Camera State */
+let physics = { earringAngle: 0, earringVelocity: 0, swayOffset: 0, lastHeadX: 0 };
 let currentCameraMode = 'user'; 
 
 /* Auto Try State */
@@ -66,10 +60,9 @@ const coShop = {
     conn: null,
     myId: null,
     active: false,
-    isHost: false,
+    isHost: false, // true = I am the model, false = I am the viewer
 
     init: function() {
-        // Create Peer with random ID
         this.peer = new Peer(null, { debug: 2 });
         
         this.peer.on('open', (id) => {
@@ -78,34 +71,59 @@ const coShop = {
             this.checkForInvite();
         });
 
+        // Handle incoming data (Sync/Vote)
         this.peer.on('connection', (c) => {
             this.handleConnection(c);
-            showToast("Friend Joined!");
+            showToast("Friend Connected!");
             this.activateUI();
+            
+            // FIX: If I am the host, I must call the guest with my video stream
+            if (this.isHost) {
+                setTimeout(() => this.callGuest(c.peer), 1000); 
+            }
+        });
+
+        // FIX: Handle incoming Video Call (Guest receives Host stream)
+        this.peer.on('call', (call) => {
+            console.log("Receiving call...");
+            call.answer(); // Answer without stream (View only)
+            call.on('stream', (remoteStream) => {
+                console.log("Stream received!");
+                remoteVideo.srcObject = remoteStream;
+                remoteVideo.style.display = 'block'; // Show remote video
+                videoElement.style.display = 'none'; // Hide local video
+                canvasElement.style.display = 'none'; // Hide local AR
+                showToast("Watching Host Live");
+            });
         });
 
         this.peer.on('error', (err) => console.error(err));
     },
 
     checkForInvite: function() {
-        // Check URL for ?room=ID
         const urlParams = new URLSearchParams(window.location.search);
         const roomId = urlParams.get('room');
         if (roomId) {
+            // I am the GUEST
             console.log("Joining Room: " + roomId);
+            this.isHost = false; 
             this.connectToHost(roomId);
+            // As guest, we stop our local camera to save resources since we just want to watch
+            // (Optional: keep it on if you want 2-way video later)
         } else {
+            // I am the HOST
             this.isHost = true;
+            document.body.classList.add('hosting'); // Add class for CSS
         }
     },
 
     connectToHost: function(hostId) {
         this.conn = this.peer.connect(hostId);
         this.conn.on('open', () => {
-            showToast("Connected to Host!");
+            showToast("Connected! Waiting for video...");
             this.activateUI();
-            this.setupDataListener();
         });
+        this.setupDataListener();
     },
 
     handleConnection: function(c) {
@@ -113,21 +131,27 @@ const coShop = {
         this.setupDataListener();
     },
 
+    // FIX: Function to stream the AR Canvas to the Guest
+    callGuest: function(guestId) {
+        // Capture the canvas (which now contains Video + AR) as a stream at 30fps
+        const stream = canvasElement.captureStream(30);
+        const call = this.peer.call(guestId, stream);
+        console.log("Calling guest with AR stream...");
+    },
+
     setupDataListener: function() {
         this.conn.on('data', (data) => {
-            console.log("Received:", data);
-            if (data.type === 'SYNC_ITEM') {
-                // Apply the item locally WITHOUT sending it back (prevent loop)
-                selectJewelryType(data.cat).then(() => {
-                    applyAssetInstantly(JEWELRY_ASSETS[data.cat][data.idx], data.idx, false);
-                });
-            } else if (data.type === 'VOTE') {
+            if (data.type === 'VOTE') {
                 showReaction(data.val);
             }
+            // Note: We removed SYNC_ITEM for guests because they are watching the video now, 
+            // so they don't need to render the item locally!
         });
     },
 
     sendUpdate: function(category, index) {
+        // Host doesn't need to send sync data if streaming video, 
+        // but can keep it if we want to update UI text on guest side.
         if (this.conn && this.conn.open) {
             this.conn.send({ type: 'SYNC_ITEM', cat: category, idx: index });
         }
@@ -136,9 +160,7 @@ const coShop = {
     sendVote: function(val) {
         if (this.conn && this.conn.open) {
             this.conn.send({ type: 'VOTE', val: val });
-            showReaction(val); // Show locally too
-        } else {
-            showToast("No one connected!");
+            showReaction(val); 
         }
     },
     
@@ -152,42 +174,29 @@ const coShop = {
 /* --- HELPER: LERP --- */
 function lerp(start, end, amt) { return (1 - amt) * start + amt * end; }
 
-/* --- 1. DAILY DROP FEATURE --- */
+/* --- DAILY DROP --- */
 function checkDailyDrop() {
     const today = new Date().toDateString();
     const lastSeen = localStorage.getItem('jewels_daily_date');
-
     if (lastSeen !== today && JEWELRY_ASSETS['earrings'] && JEWELRY_ASSETS['earrings'].length > 0) {
         const list = JEWELRY_ASSETS['earrings'];
         const randomIdx = Math.floor(Math.random() * list.length);
         dailyItem = { item: list[randomIdx], index: randomIdx, type: 'earrings' };
-        
         document.getElementById('daily-img').src = dailyItem.item.thumbSrc;
-        let cleanName = dailyItem.item.name.replace(/\.[^/.]+$/, "").replace(/_/g, " ");
-        document.getElementById('daily-name').innerText = cleanName;
+        document.getElementById('daily-name').innerText = dailyItem.item.name;
         document.getElementById('daily-drop-modal').style.display = 'flex';
         localStorage.setItem('jewels_daily_date', today);
     }
 }
-
 function closeDailyDrop() { document.getElementById('daily-drop-modal').style.display = 'none'; }
+function tryDailyItem() { closeDailyDrop(); if (dailyItem) { selectJewelryType(dailyItem.type).then(() => { applyAssetInstantly(dailyItem.item, dailyItem.index, true); }); }}
 
-function tryDailyItem() {
-    closeDailyDrop();
-    if (dailyItem) {
-        selectJewelryType(dailyItem.type).then(() => {
-            applyAssetInstantly(dailyItem.item, dailyItem.index, true);
-        });
-    }
-}
-
-/* --- 2. PHYSICS ENGINE --- */
+/* --- PHYSICS ENGINE --- */
 function updatePhysics(headTilt, headX, width) {
     const gravityTarget = -headTilt; 
     physics.earringVelocity += (gravityTarget - physics.earringAngle) * 0.1; 
     physics.earringVelocity *= 0.92; 
     physics.earringAngle += physics.earringVelocity;
-
     const headSpeed = (headX - physics.lastHeadX); 
     physics.lastHeadX = headX;
     physics.swayOffset += headSpeed * -1.5; 
@@ -196,11 +205,8 @@ function updatePhysics(headTilt, headX, width) {
     if (physics.swayOffset < -0.5) physics.swayOffset = -0.5;
 }
 
-/* --- 3. BACKGROUND FETCHING --- */
-function initBackgroundFetch() {
-    Object.keys(DRIVE_FOLDERS).forEach(key => { fetchCategoryData(key); });
-}
-
+/* --- BACKGROUND FETCHING --- */
+function initBackgroundFetch() { Object.keys(DRIVE_FOLDERS).forEach(key => { fetchCategoryData(key); }); }
 function fetchCategoryData(category) {
     if (CATALOG_PROMISES[category]) return CATALOG_PROMISES[category];
     const fetchPromise = new Promise(async (resolve, reject) => {
@@ -208,33 +214,26 @@ function fetchCategoryData(category) {
             const folderId = DRIVE_FOLDERS[category];
             const query = `'${folderId}' in parents and trashed = false and mimeType contains 'image/'`;
             const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&pageSize=1000&fields=files(id,name,thumbnailLink)&key=${API_KEY}`;
-            
             const response = await fetch(url);
             const data = await response.json();
-            
             if (data.error) throw new Error(data.error.message);
-
             JEWELRY_ASSETS[category] = data.files.map(file => {
                 const baseLink = file.thumbnailLink;
-                let thumbSrc, fullSrc;
-                if (baseLink) {
-                    thumbSrc = baseLink.replace(/=s\d+$/, "=s400");
-                    fullSrc = baseLink.replace(/=s\d+$/, "=s3000");
-                } else {
-                    thumbSrc = `https://drive.google.com/thumbnail?id=${file.id}`;
-                    fullSrc = `https://drive.google.com/uc?export=view&id=${file.id}`;
-                }
-                return { id: file.id, name: file.name, thumbSrc: thumbSrc, fullSrc: fullSrc };
+                return { 
+                    id: file.id, name: file.name, 
+                    thumbSrc: baseLink ? baseLink.replace(/=s\d+$/, "=s400") : "", 
+                    fullSrc: baseLink ? baseLink.replace(/=s\d+$/, "=s3000") : ""
+                };
             });
             if (category === 'earrings') setTimeout(checkDailyDrop, 2000);
             resolve(JEWELRY_ASSETS[category]);
-        } catch (err) { console.error(`Error loading ${category}:`, err); resolve([]); }
+        } catch (err) { console.error(err); resolve([]); }
     });
     CATALOG_PROMISES[category] = fetchPromise;
     return fetchPromise;
 }
 
-/* --- 4. ASSET LOADING --- */
+/* --- ASSET LOADING --- */
 function loadAsset(src, id) {
     return new Promise((resolve) => {
         if (!src) { resolve(null); return; }
@@ -252,52 +251,43 @@ function setActiveARImage(img) {
     else if (currentType === 'bangles') bangleImg = img;
 }
 
-/* --- 5. INITIALIZATION --- */
+/* --- INITIALIZATION --- */
 window.onload = async () => {
     initBackgroundFetch();
-    coShop.init(); // Initialize Multiplayer
+    coShop.init(); 
     await startCameraFast('user');
     setTimeout(() => { loadingStatus.style.display = 'none'; }, 2000);
     await selectJewelryType('earrings');
 };
 
-/* --- 6. CORE APP LOGIC --- */
+/* --- CORE APP LOGIC --- */
 async function selectJewelryType(type) {
   if (currentType === type) return;
   currentType = type;
-  
   const targetMode = (type === 'rings' || type === 'bangles') ? 'environment' : 'user';
   startCameraFast(targetMode); 
-
   earringImg = null; necklaceImg = null; ringImg = null; bangleImg = null;
   const container = document.getElementById('jewelry-options'); 
   container.innerHTML = ''; 
-  
   let assets = JEWELRY_ASSETS[type];
   if (!assets) assets = await fetchCategoryData(type);
   if (!assets || assets.length === 0) return;
-
-  container.style.display = 'flex';
   const fragment = document.createDocumentFragment();
-  
   assets.forEach((asset, i) => {
-    const btnImg = new Image(); btnImg.src = asset.thumbSrc; btnImg.crossOrigin = 'anonymous'; btnImg.className = "thumb-btn"; btnImg.loading = "lazy"; 
-    btnImg.onclick = () => { applyAssetInstantly(asset, i, true); }; // Pass TRUE to broadcast
+    const btnImg = new Image(); btnImg.src = asset.thumbSrc; btnImg.className = "thumb-btn"; 
+    btnImg.onclick = () => { applyAssetInstantly(asset, i, true); };
     fragment.appendChild(btnImg);
   });
   container.appendChild(fragment);
-  applyAssetInstantly(assets[0], 0, false); // Don't broadcast initial load
+  applyAssetInstantly(assets[0], 0, false);
 }
 
 async function applyAssetInstantly(asset, index, shouldBroadcast = true) {
     currentAssetIndex = index; currentAssetName = asset.name; highlightButtonByIndex(index);
     const thumbImg = new Image(); thumbImg.src = asset.thumbSrc; thumbImg.crossOrigin = 'anonymous'; setActiveARImage(thumbImg);
-    
-    // Broadcast to friend
-    if (shouldBroadcast && coShop.active) {
+    if (shouldBroadcast && coShop.active && coShop.isHost) {
         coShop.sendUpdate(currentType, index);
     }
-
     const highResImg = await loadAsset(asset.fullSrc, asset.id);
     if (currentAssetName === asset.name && highResImg) setActiveARImage(highResImg);
 }
@@ -305,13 +295,17 @@ async function applyAssetInstantly(asset, index, shouldBroadcast = true) {
 function highlightButtonByIndex(index) {
     const children = document.getElementById('jewelry-options').children;
     for (let i = 0; i < children.length; i++) {
-        if (i === index) { children[i].style.borderColor = "var(--accent)"; children[i].style.transform = "scale(1.05)"; children[i].scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" }); } 
-        else { children[i].style.borderColor = "rgba(255,255,255,0.2)"; children[i].style.transform = "scale(1)"; }
+        children[i].style.borderColor = (i === index) ? "var(--accent)" : "rgba(255,255,255,0.2)"; 
+        children[i].style.transform = (i === index) ? "scale(1.05)" : "scale(1)"; 
+        if(i===index) children[i].scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
     }
 }
 
-/* --- 7. CAMERA & AI LOOP --- */
+/* --- CAMERA & AI LOOP --- */
 async function startCameraFast(mode = 'user') {
+    // If guest, do not start camera to save resources/conflicts
+    if (!coShop.isHost && coShop.active) return;
+
     if (videoElement.srcObject && currentCameraMode === mode && videoElement.readyState >= 2) return;
     currentCameraMode = mode;
     if (videoElement.srcObject) { videoElement.srcObject.getTracks().forEach(track => track.stop()); }
@@ -320,27 +314,33 @@ async function startCameraFast(mode = 'user') {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: mode } });
         videoElement.srcObject = stream;
         videoElement.onloadeddata = () => { videoElement.play(); detectLoop(); };
-    } catch (err) { alert("Camera Error: " + err.message); }
+    } catch (err) { console.error("Camera Error", err); }
 }
 
 async function detectLoop() {
-    if (videoElement.readyState >= 2) {
+    if (videoElement.readyState >= 2 && !remoteVideo.srcObject) { // Only process if not watching remote
         if (!isProcessingFace) { isProcessingFace = true; await faceMesh.send({image: videoElement}); isProcessingFace = false; }
         if (!isProcessingHand) { isProcessingHand = true; await hands.send({image: videoElement}); isProcessingHand = false; }
     }
     requestAnimationFrame(detectLoop);
 }
 
-/* --- 8. MEDIAPIPE FACE (Same as before) --- */
+/* --- MEDIAPIPE FACE (Fixed Render) --- */
 const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
 faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 faceMesh.onResults((results) => {
   if (currentType !== 'earrings' && currentType !== 'chains') return;
   const w = videoElement.videoWidth; const h = videoElement.videoHeight;
   canvasElement.width = w; canvasElement.height = h;
-  canvasCtx.save(); canvasCtx.clearRect(0, 0, w, h);
+  
+  // FIX: DRAW VIDEO TO CANVAS so it can be streamed
+  canvasCtx.save();
   if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
   else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
+  
+  // Draw the video frame onto the canvas
+  canvasCtx.drawImage(videoElement, 0, 0, w, h);
+
   if (results.multiFaceLandmarks && results.multiFaceLandmarks[0]) {
     const lm = results.multiFaceLandmarks[0]; 
     const leftEar = { x: lm[132].x * w, y: lm[132].y * h }; const rightEar = { x: lm[361].x * w, y: lm[361].y * h };
@@ -356,10 +356,8 @@ faceMesh.onResults((results) => {
       let ew = earDist * 0.25; let eh = (earringImg.height/earringImg.width) * ew;
       const xShift = ew * 0.05; 
       const totalAngle = physics.earringAngle + (physics.swayOffset * 0.5);
-      canvasCtx.shadowColor = "rgba(0,0,0,0.5)"; canvasCtx.shadowBlur = 15; canvasCtx.shadowOffsetX = 2; canvasCtx.shadowOffsetY = 5;
       if (showLeft) { canvasCtx.save(); canvasCtx.translate(leftEar.x, leftEar.y); canvasCtx.rotate(totalAngle); canvasCtx.drawImage(earringImg, (-ew/2) - xShift, -eh * 0.20, ew, eh); canvasCtx.restore(); }
       if (showRight) { canvasCtx.save(); canvasCtx.translate(rightEar.x, rightEar.y); canvasCtx.rotate(totalAngle); canvasCtx.drawImage(earringImg, (-ew/2) + xShift, -eh * 0.20, ew, eh); canvasCtx.restore(); }
-      canvasCtx.shadowColor = "transparent";
     }
     if (necklaceImg && necklaceImg.complete) {
       const nw = earDist * 0.85; const nh = (necklaceImg.height/necklaceImg.width) * nw;
@@ -369,7 +367,7 @@ faceMesh.onResults((results) => {
   canvasCtx.restore();
 });
 
-/* --- 9. MEDIAPIPE HANDS (Same as before) --- */
+/* --- MEDIAPIPE HANDS (Fixed Render) --- */
 const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
 hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 function calculateAngle(p1, p2) { return Math.atan2(p2.y - p1.y, p2.x - p1.x); }
@@ -377,9 +375,13 @@ hands.onResults((results) => {
   const w = videoElement.videoWidth; const h = videoElement.videoHeight;
   if (currentType !== 'rings' && currentType !== 'bangles') return;
   canvasElement.width = w; canvasElement.height = h;
-  canvasCtx.save(); canvasCtx.clearRect(0, 0, w, h);
+  
+  // FIX: Draw video frame
+  canvasCtx.save();
   if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
   else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
+  canvasCtx.drawImage(videoElement, 0, 0, w, h);
+
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       const lm = results.multiHandLandmarks[0];
       const mcp = { x: lm[13].x * w, y: lm[13].y * h }; const pip = { x: lm[14].x * w, y: lm[14].y * h };
@@ -402,7 +404,6 @@ hands.onResults((results) => {
           handSmoother.bangle.angle = lerp(handSmoother.bangle.angle, targetArmAngle, SMOOTH_FACTOR);
           handSmoother.bangle.size = lerp(handSmoother.bangle.size, targetBangleWidth, SMOOTH_FACTOR);
       }
-      canvasCtx.shadowColor = "rgba(0,0,0,0.4)"; canvasCtx.shadowBlur = 10; canvasCtx.shadowOffsetY = 5;
       if (ringImg && ringImg.complete) {
           const rHeight = (ringImg.height / ringImg.width) * handSmoother.ring.size;
           canvasCtx.save(); canvasCtx.translate(handSmoother.ring.x, handSmoother.ring.y); canvasCtx.rotate(handSmoother.ring.angle); 
@@ -413,12 +414,11 @@ hands.onResults((results) => {
           canvasCtx.save(); canvasCtx.translate(handSmoother.bangle.x, handSmoother.bangle.y); canvasCtx.rotate(handSmoother.bangle.angle);
           canvasCtx.drawImage(bangleImg, -handSmoother.bangle.size/2, -bHeight/2, handSmoother.bangle.size, bHeight); canvasCtx.restore();
       }
-      canvasCtx.shadowColor = "transparent";
   }
   canvasCtx.restore();
 });
 
-/* --- EXPORTS & UI HANDLERS --- */
+/* --- UI HANDLERS --- */
 window.selectJewelryType = selectJewelryType; 
 window.toggleTryAll = toggleTryAll; 
 window.tryDailyItem = tryDailyItem; 
@@ -439,17 +439,10 @@ function toggleCoShop() {
     if (coShop.myId) {
         document.getElementById('invite-link-box').innerText = window.location.origin + window.location.pathname + "?room=" + coShop.myId;
         modal.style.display = 'flex';
-    } else {
-        showToast("Generating ID...");
-    }
+    } else { showToast("Generating ID..."); }
 }
 function closeCoShopModal() { document.getElementById('coshop-modal').style.display = 'none'; }
-function copyInviteLink() {
-    const text = document.getElementById('invite-link-box').innerText;
-    navigator.clipboard.writeText(text).then(() => showToast("Link Copied!"));
-}
-
-// Flash Animation (same)
+function copyInviteLink() { navigator.clipboard.writeText(document.getElementById('invite-link-box').innerText).then(() => showToast("Link Copied!")); }
 function triggerFlash() { if(!flashOverlay) return; flashOverlay.classList.remove('flash-active'); void flashOverlay.offsetWidth; flashOverlay.classList.add('flash-active'); setTimeout(() => { flashOverlay.classList.remove('flash-active'); }, 300); }
 function toggleTryAll() { if (!currentType) { alert("Select category!"); return; } if (autoTryRunning) stopAutoTry(); else startAutoTry(); }
 function startAutoTry() { autoTryRunning = true; autoSnapshots = []; autoTryIndex = 0; document.getElementById('tryall-btn').textContent = "STOP"; runAutoStep(); }
@@ -465,14 +458,4 @@ function showGallery() { const grid = document.getElementById('gallery-grid'); g
 function closePreview() { document.getElementById('preview-modal').style.display = 'none'; }
 function closeGallery() { document.getElementById('gallery-modal').style.display = 'none'; }
 function closeLightbox() { document.getElementById('lightbox-overlay').style.display = 'none'; }
-
-// Reaction Animation
-function showReaction(type) {
-    const container = document.getElementById('reaction-container');
-    const el = document.createElement('div');
-    el.innerText = type === 'love' ? '❤️' : '👎';
-    el.className = 'floating-reaction';
-    el.style.left = Math.random() * 80 + 10 + '%';
-    container.appendChild(el);
-    setTimeout(() => el.remove(), 2000);
-}
+function showReaction(type) { const container = document.getElementById('reaction-container'); const el = document.createElement('div'); el.innerText = type === 'love' ? '❤️' : '👎'; el.className = 'floating-reaction'; el.style.left = Math.random() * 80 + 10 + '%'; container.appendChild(el); setTimeout(() => el.remove(), 2000); }

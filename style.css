@@ -195,3 +195,16 @@ body {
 }
 
 @keyframes spin { 100% { transform: rotate(360deg); } }
+
+/* --- 8. REMOTE STREAM (CO-SHOPPING) --- */
+#remote-video {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; z-index: 5; background: #000;
+    display: none; /* Hidden unless receiving stream */
+    transform: scaleX(1); /* Usually remote stream is not mirrored */
+}
+
+/* When acting as Host, we hide the raw webcam to avoid 'ghosting' 
+   since we are drawing the video directly onto the canvas now. */
+body.hosting #webcam { opacity: 0; }
+body.hosting #overlay { background: #000; }
