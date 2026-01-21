@@ -1,4 +1,4 @@
-/* script.js - Jewels-Ai Atelier: v5.1 (Live Streaming Fixed) */
+/* script.js - Jewels-Ai Atelier: v5.2 (Fix: Carousel & Hosting) */
 
 /* --- CONFIGURATION --- */
 const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
@@ -21,7 +21,7 @@ const watermarkImg = new Image(); watermarkImg.src = 'logo_watermark.png';
 /* DOM Elements */
 const videoElement = document.getElementById('webcam');
 const canvasElement = document.getElementById('overlay');
-const remoteVideo = document.getElementById('remote-video'); // NEW: Remote Video
+const remoteVideo = document.getElementById('remote-video');
 const canvasCtx = canvasElement.getContext('2d');
 const loadingStatus = document.getElementById('loading-status');
 const flashOverlay = document.getElementById('flash-overlay'); 
@@ -60,7 +60,7 @@ const coShop = {
     conn: null,
     myId: null,
     active: false,
-    isHost: false, // true = I am the model, false = I am the viewer
+    isHost: false, 
 
     init: function() {
         this.peer = new Peer(null, { debug: 2 });
@@ -71,28 +71,23 @@ const coShop = {
             this.checkForInvite();
         });
 
-        // Handle incoming data (Sync/Vote)
         this.peer.on('connection', (c) => {
             this.handleConnection(c);
             showToast("Friend Connected!");
             this.activateUI();
-            
-            // FIX: If I am the host, I must call the guest with my video stream
             if (this.isHost) {
                 setTimeout(() => this.callGuest(c.peer), 1000); 
             }
         });
 
-        // FIX: Handle incoming Video Call (Guest receives Host stream)
         this.peer.on('call', (call) => {
             console.log("Receiving call...");
-            call.answer(); // Answer without stream (View only)
+            call.answer(); 
             call.on('stream', (remoteStream) => {
-                console.log("Stream received!");
                 remoteVideo.srcObject = remoteStream;
-                remoteVideo.style.display = 'block'; // Show remote video
-                videoElement.style.display = 'none'; // Hide local video
-                canvasElement.style.display = 'none'; // Hide local AR
+                remoteVideo.style.display = 'block'; 
+                videoElement.style.display = 'none'; 
+                canvasElement.style.display = 'none'; 
                 showToast("Watching Host Live");
             });
         });
@@ -104,16 +99,11 @@ const coShop = {
         const urlParams = new URLSearchParams(window.location.search);
         const roomId = urlParams.get('room');
         if (roomId) {
-            // I am the GUEST
-            console.log("Joining Room: " + roomId);
             this.isHost = false; 
             this.connectToHost(roomId);
-            // As guest, we stop our local camera to save resources since we just want to watch
-            // (Optional: keep it on if you want 2-way video later)
         } else {
-            // I am the HOST
             this.isHost = true;
-            document.body.classList.add('hosting'); // Add class for CSS
+            document.body.classList.add('hosting'); 
         }
     },
 
@@ -131,27 +121,18 @@ const coShop = {
         this.setupDataListener();
     },
 
-    // FIX: Function to stream the AR Canvas to the Guest
     callGuest: function(guestId) {
-        // Capture the canvas (which now contains Video + AR) as a stream at 30fps
         const stream = canvasElement.captureStream(30);
         const call = this.peer.call(guestId, stream);
-        console.log("Calling guest with AR stream...");
     },
 
     setupDataListener: function() {
         this.conn.on('data', (data) => {
-            if (data.type === 'VOTE') {
-                showReaction(data.val);
-            }
-            // Note: We removed SYNC_ITEM for guests because they are watching the video now, 
-            // so they don't need to render the item locally!
+            if (data.type === 'VOTE') { showReaction(data.val); }
         });
     },
 
     sendUpdate: function(category, index) {
-        // Host doesn't need to send sync data if streaming video, 
-        // but can keep it if we want to update UI text on guest side.
         if (this.conn && this.conn.open) {
             this.conn.send({ type: 'SYNC_ITEM', cat: category, idx: index });
         }
@@ -191,7 +172,7 @@ function checkDailyDrop() {
 function closeDailyDrop() { document.getElementById('daily-drop-modal').style.display = 'none'; }
 function tryDailyItem() { closeDailyDrop(); if (dailyItem) { selectJewelryType(dailyItem.type).then(() => { applyAssetInstantly(dailyItem.item, dailyItem.index, true); }); }}
 
-/* --- PHYSICS ENGINE --- */
+/* --- PHYSICS --- */
 function updatePhysics(headTilt, headX, width) {
     const gravityTarget = -headTilt; 
     physics.earringVelocity += (gravityTarget - physics.earringAngle) * 0.1; 
@@ -205,7 +186,7 @@ function updatePhysics(headTilt, headX, width) {
     if (physics.swayOffset < -0.5) physics.swayOffset = -0.5;
 }
 
-/* --- BACKGROUND FETCHING --- */
+/* --- BACKGROUND FETCHING (FIXED URL LOGIC) --- */
 function initBackgroundFetch() { Object.keys(DRIVE_FOLDERS).forEach(key => { fetchCategoryData(key); }); }
 function fetchCategoryData(category) {
     if (CATALOG_PROMISES[category]) return CATALOG_PROMISES[category];
@@ -217,14 +198,22 @@ function fetchCategoryData(category) {
             const response = await fetch(url);
             const data = await response.json();
             if (data.error) throw new Error(data.error.message);
+            
             JEWELRY_ASSETS[category] = data.files.map(file => {
                 const baseLink = file.thumbnailLink;
-                return { 
-                    id: file.id, name: file.name, 
-                    thumbSrc: baseLink ? baseLink.replace(/=s\d+$/, "=s400") : "", 
-                    fullSrc: baseLink ? baseLink.replace(/=s\d+$/, "=s3000") : ""
-                };
+                let thumbSrc, fullSrc;
+                // FIX: Better fallback logic ensures images always load
+                if (baseLink) {
+                    thumbSrc = baseLink.replace(/=s\d+$/, "=s400");
+                    fullSrc = baseLink.replace(/=s\d+$/, "=s3000");
+                } else {
+                    // Fallback to direct ID links if thumbnailLink is missing
+                    thumbSrc = `https://drive.google.com/thumbnail?id=${file.id}`;
+                    fullSrc = `https://drive.google.com/uc?export=view&id=${file.id}`;
+                }
+                return { id: file.id, name: file.name, thumbSrc: thumbSrc, fullSrc: fullSrc };
             });
+
             if (category === 'earrings') setTimeout(checkDailyDrop, 2000);
             resolve(JEWELRY_ASSETS[category]);
         } catch (err) { console.error(err); resolve([]); }
@@ -260,18 +249,24 @@ window.onload = async () => {
     await selectJewelryType('earrings');
 };
 
-/* --- CORE APP LOGIC --- */
+/* --- SELECTION LOGIC (FIX: RESTORE VISIBILITY) --- */
 async function selectJewelryType(type) {
   if (currentType === type) return;
   currentType = type;
   const targetMode = (type === 'rings' || type === 'bangles') ? 'environment' : 'user';
   startCameraFast(targetMode); 
+  
   earringImg = null; necklaceImg = null; ringImg = null; bangleImg = null;
   const container = document.getElementById('jewelry-options'); 
   container.innerHTML = ''; 
+  
   let assets = JEWELRY_ASSETS[type];
   if (!assets) assets = await fetchCategoryData(type);
   if (!assets || assets.length === 0) return;
+
+  // FIX: Make the carousel visible!
+  container.style.display = 'flex';
+
   const fragment = document.createDocumentFragment();
   assets.forEach((asset, i) => {
     const btnImg = new Image(); btnImg.src = asset.thumbSrc; btnImg.className = "thumb-btn"; 
@@ -301,11 +296,9 @@ function highlightButtonByIndex(index) {
     }
 }
 
-/* --- CAMERA & AI LOOP --- */
+/* --- CAMERA & RENDER LOOPS --- */
 async function startCameraFast(mode = 'user') {
-    // If guest, do not start camera to save resources/conflicts
-    if (!coShop.isHost && coShop.active) return;
-
+    if (!coShop.isHost && coShop.active) return; // Guest doesn't need cam
     if (videoElement.srcObject && currentCameraMode === mode && videoElement.readyState >= 2) return;
     currentCameraMode = mode;
     if (videoElement.srcObject) { videoElement.srcObject.getTracks().forEach(track => track.stop()); }
@@ -318,29 +311,24 @@ async function startCameraFast(mode = 'user') {
 }
 
 async function detectLoop() {
-    if (videoElement.readyState >= 2 && !remoteVideo.srcObject) { // Only process if not watching remote
+    if (videoElement.readyState >= 2 && !remoteVideo.srcObject) { 
         if (!isProcessingFace) { isProcessingFace = true; await faceMesh.send({image: videoElement}); isProcessingFace = false; }
         if (!isProcessingHand) { isProcessingHand = true; await hands.send({image: videoElement}); isProcessingHand = false; }
     }
     requestAnimationFrame(detectLoop);
 }
 
-/* --- MEDIAPIPE FACE (Fixed Render) --- */
+/* --- MEDIAPIPE FACE --- */
 const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
 faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 faceMesh.onResults((results) => {
   if (currentType !== 'earrings' && currentType !== 'chains') return;
   const w = videoElement.videoWidth; const h = videoElement.videoHeight;
   canvasElement.width = w; canvasElement.height = h;
-  
-  // FIX: DRAW VIDEO TO CANVAS so it can be streamed
   canvasCtx.save();
   if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
   else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
-  
-  // Draw the video frame onto the canvas
   canvasCtx.drawImage(videoElement, 0, 0, w, h);
-
   if (results.multiFaceLandmarks && results.multiFaceLandmarks[0]) {
     const lm = results.multiFaceLandmarks[0]; 
     const leftEar = { x: lm[132].x * w, y: lm[132].y * h }; const rightEar = { x: lm[361].x * w, y: lm[361].y * h };
@@ -367,7 +355,7 @@ faceMesh.onResults((results) => {
   canvasCtx.restore();
 });
 
-/* --- MEDIAPIPE HANDS (Fixed Render) --- */
+/* --- MEDIAPIPE HANDS --- */
 const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
 hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 function calculateAngle(p1, p2) { return Math.atan2(p2.y - p1.y, p2.x - p1.x); }
@@ -375,13 +363,10 @@ hands.onResults((results) => {
   const w = videoElement.videoWidth; const h = videoElement.videoHeight;
   if (currentType !== 'rings' && currentType !== 'bangles') return;
   canvasElement.width = w; canvasElement.height = h;
-  
-  // FIX: Draw video frame
   canvasCtx.save();
   if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
   else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
   canvasCtx.drawImage(videoElement, 0, 0, w, h);
-
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       const lm = results.multiHandLandmarks[0];
       const mcp = { x: lm[13].x * w, y: lm[13].y * h }; const pip = { x: lm[14].x * w, y: lm[14].y * h };
@@ -418,7 +403,7 @@ hands.onResults((results) => {
   canvasCtx.restore();
 });
 
-/* --- UI HANDLERS --- */
+/* --- UTILS --- */
 window.selectJewelryType = selectJewelryType; 
 window.toggleTryAll = toggleTryAll; 
 window.tryDailyItem = tryDailyItem; 
